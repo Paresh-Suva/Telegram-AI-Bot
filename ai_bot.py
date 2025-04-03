@@ -1,33 +1,36 @@
-import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackContext, CallbackQueryHandler, MessageHandler, filters
-import requests
-
-# Enable logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
-# Configuration - REPLACE THESE WITH YOUR VALUES
-CHANNEL_USERNAME = "@YourChannelUsername"
-OWNER_ID = 1206054854  # Your Telegram user ID
-
 import os
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")  # From Railway
-WEATHER_KEY = os.getenv("WEATHER_API_KEY")        # From Railway
+import logging
+import requests
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackContext,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters
+)
+
+# ==================== CONFIGURATION ==================== #
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
+OWNER_ID = 1206054854  # Replace with your Telegram ID
+CHANNEL_USERNAME = "@MemeAddictsDaily"  # Your Telegram channel
 
 # API Endpoints
-WIKI_API_URL = "https://en.wikipedia.org/api/rest_v1/page/summary/"
-QUIZ_API_URL = "https://opentdb.com/api.php?amount=1&type=multiple"
-WEATHER_API_URL = "https://api.openweathermap.org/data/2.5/weather"
-FACT_API_URL = "https://uselessfacts.jsph.pl/random.json?language=en"
-JOKE_API_URL = "https://v2.jokeapi.dev/joke/Any"
-WORD_API_URL = "https://random-word-api.herokuapp.com/word"
-CURRENCY_API_URL = "https://api.exchangerate-api.com/v4/latest/USD"
+API_URLS = {
+    "wiki": "https://en.wikipedia.org/api/rest_v1/page/summary/",
+    "quiz": "https://opentdb.com/api.php?amount=1&type=multiple",
+    "weather": "https://api.openweathermap.org/data/2.5/weather",
+    "fact": "https://uselessfacts.jsph.pl/random.json?language=en",
+    "joke": "https://v2.jokeapi.dev/joke/Any",
+    "word": "https://random-word-api.herokuapp.com/word",
+    "currency": "https://api.exchangerate-api.com/v4/latest/USD"
+}
 
+# ==================== CORE FUNCTIONS ==================== #
 async def is_member(update: Update, context: CallbackContext) -> bool:
+    """Check if user is channel member"""
     user_id = update.effective_user.id
     if user_id == OWNER_ID:
         return True
@@ -35,225 +38,173 @@ async def is_member(update: Update, context: CallbackContext) -> bool:
         member = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
         return member.status in ["member", "administrator", "creator"]
     except Exception as e:
-        logger.error(f"Membership check error: {e}")
+        logging.error(f"Membership check failed: {e}")
         return False
 
 async def start(update: Update, context: CallbackContext) -> None:
+    """Send interactive menu"""
     keyboard = [
-        [InlineKeyboardButton("Join Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")],
-        [InlineKeyboardButton("✅ Check Membership", callback_data="check_member")],
-        [InlineKeyboardButton("📋 Show Menu", callback_data="show_menu")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        f"🤖 Welcome to AI Knowledge Bot!\n\n"
-        f"Join {CHANNEL_USERNAME} to access all features!",
-        reply_markup=reply_markup
-    )
-
-async def show_menu(update: Update, context: CallbackContext) -> None:
-    query = update.callback_query
-    await query.answer()
-    
-    if not await is_member(update, context):
-        await query.edit_message_text(
-            "❌ Please join our channel first to use the bot!",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Join Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")],
-                [InlineKeyboardButton("✅ Check Membership", callback_data="check_member")]
-            ])
-        )
-        return
-    
-    keyboard = [
-        [InlineKeyboardButton("📖 Wikipedia", callback_data="wiki")],
-        [InlineKeyboardButton("❓ Quiz", callback_data="quiz")],
-        [InlineKeyboardButton("⛅ Weather", callback_data="weather")],
-        [InlineKeyboardButton("💡 Fact", callback_data="fact")],
-        [InlineKeyboardButton("😂 Joke", callback_data="joke")],
-        [InlineKeyboardButton("📝 Word", callback_data="word")],
-        [InlineKeyboardButton("💱 Currency", callback_data="currency")],
-        [InlineKeyboardButton("🏠 Main Menu", callback_data="show_menu")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("📋 Main Menu - Choose an option:", reply_markup=reply_markup)
-
-async def menu_selection(update: Update, context: CallbackContext) -> None:
-    query = update.callback_query
-    await query.answer()
-    option = query.data
-    
-    if not await is_member(update, context):
-        await show_menu(update, context)
-        return
-    
-    if option == "wiki":
-        await query.edit_message_text(
-            "🔍 Please enter a topic for Wikipedia search:",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("↩️ Back to Menu", callback_data="show_menu")]
-            ])
-        )
-        context.user_data['awaiting_wiki'] = True
-    elif option == "weather":
-        await query.edit_message_text(
-            "🌍 Enter a city name for weather information:",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("↩️ Back to Menu", callback_data="show_menu")]
-            ])
-        )
-        context.user_data['awaiting_weather'] = True
-    elif option == "currency":
-        await query.edit_message_text(
-            "💱 Enter a currency code (e.g., USD, EUR):",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("↩️ Back to Menu", callback_data="show_menu")]
-            ])
-        )
-        context.user_data['awaiting_currency'] = True
-    else:
-        await handle_immediate_response(update, context, option)
-
-async def handle_immediate_response(update: Update, context: CallbackContext, option: str) -> None:
-    query = update.callback_query
-    try:
-        if option == "quiz":
-            response = requests.get(QUIZ_API_URL).json()
-            question = response['results'][0]['question']
-            text = f"❓ Quiz Question:\n\n{question}"
-        elif option == "fact":
-            response = requests.get(FACT_API_URL).json()
-            text = f"💡 Fun Fact:\n\n{response['text']}"
-        elif option == "joke":
-            response = requests.get(JOKE_API_URL).json()
-            text = "😂 Joke:\n\n"
-            if 'setup' in response:
-                text += f"{response['setup']}\n{response['delivery']}"
-            else:
-                text += response['joke']
-        elif option == "word":
-            response = requests.get(WORD_API_URL).json()
-            text = f"📝 Random Word:\n\n{response[0]}"
-        
-        keyboard = [
-            [InlineKeyboardButton("🔄 Get Another", callback_data=option)],
-            [InlineKeyboardButton("🏠 Main Menu", callback_data="show_menu")]
-        ]
-        await query.edit_message_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    except Exception as e:
-        logger.error(f"Error in {option} handler: {e}")
-        await query.edit_message_text(
-            "⚠️ Sorry, something went wrong. Please try again later.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🏠 Main Menu", callback_data="show_menu")]
-            ])
-        )
-
-async def handle_message(update: Update, context: CallbackContext) -> None:
-    if 'awaiting_wiki' in context.user_data:
-        await handle_wiki(update, context)
-    elif 'awaiting_weather' in context.user_data:
-        await handle_weather(update, context)
-    elif 'awaiting_currency' in context.user_data:
-        await handle_currency(update, context)
-    else:
-        keyboard = [[InlineKeyboardButton("📋 Show Menu", callback_data="show_menu")]]
-        await update.message.reply_text(
-            "Please select an option from the menu:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-async def handle_wiki(update: Update, context: CallbackContext) -> None:
-    topic = update.message.text
-    try:
-        response = requests.get(WIKI_API_URL + topic)
-        if response.status_code == 200:
-            data = response.json()
-            text = f"📖 {data['title']}:\n\n{data['extract']}"
-        else:
-            text = "⚠️ No information found for this topic."
-    except Exception as e:
-        logger.error(f"Wiki error: {e}")
-        text = "⚠️ Error fetching Wikipedia data."
-    
-    keyboard = [
-        [InlineKeyboardButton("🔍 New Search", callback_data="wiki")],
-        [InlineKeyboardButton("🏠 Main Menu", callback_data="show_menu")]
+        [InlineKeyboardButton("📖 Wikipedia", callback_data="wiki"),
+         InlineKeyboardButton("❓ Quiz", callback_data="quiz")],
+        [InlineKeyboardButton("⛅ Weather", callback_data="weather"),
+         InlineKeyboardButton("💡 Fact", callback_data="fact")],
+        [InlineKeyboardButton("😂 Joke", callback_data="joke"),
+         InlineKeyboardButton("📝 Word", callback_data="word")],
+        [InlineKeyboardButton("💱 Currency", callback_data="currency")]
     ]
     await update.message.reply_text(
-        text,
+        "🤖 Choose a feature:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    context.user_data.pop('awaiting_wiki', None)
+
+# ==================== FEATURE HANDLERS ==================== #
+async def handle_wiki(update: Update, context: CallbackContext) -> None:
+    """Wikipedia search"""
+    try:
+        topic = update.message.text
+        response = requests.get(f"{API_URLS['wiki']}{topic}", timeout=8)
+        data = response.json()
+        await update.message.reply_text(
+            f"📖 {data['title']}:\n\n{data['extract'][:1000]}..."
+        )
+    except Exception as e:
+        await update.message.reply_text("🔍 Wikipedia unavailable. Try /fact")
+
+async def handle_quiz(update: Update, context: CallbackContext) -> None:
+    """Trivia quiz"""
+    try:
+        response = requests.get(API_URLS["quiz"], timeout=5).json()
+        question = response["results"][0]
+        await update.message.reply_text(
+            f"❓ {question['question']}\n\n"
+            f"A) {question['correct_answer']}\n"
+            f"B) {question['incorrect_answers'][0]}"
+        )
+    except Exception as e:
+        await update.message.reply_text("📝 Quiz API down. Try /word")
 
 async def handle_weather(update: Update, context: CallbackContext) -> None:
-    city = update.message.text
+    """Weather lookup"""
     try:
-        params = {'q': city, 'appid': WEATHER_API_KEY, 'units': 'metric'}
-        response = requests.get(WEATHER_API_URL, params=params).json()
-        if response.get('cod') == 200:
-            weather = response['weather'][0]['description']
-            temp = response['main']['temp']
-            text = (
-                f"⛅ Weather in {city}:\n\n"
-                f"• Condition: {weather}\n"
-                f"• Temperature: {temp}°C"
+        city = update.message.text
+        response = requests.get(
+            API_URLS["weather"],
+            params={"q": city, "appid": WEATHER_API_KEY, "units": "metric"},
+            timeout=10
+        )
+        data = response.json()
+        await update.message.reply_text(
+            f"⛅ {city}:\n"
+            f"• Temp: {data['main']['temp']}°C\n"
+            f"• {data['weather'][0]['description']}"
+        )
+    except Exception as e:
+        await update.message.reply_text("🌧 Weather service down")
+
+async def handle_fact(update: Update, context: CallbackContext) -> None:
+    """Random fact"""
+    try:
+        fact = requests.get(API_URLS["fact"], timeout=5).json()["text"]
+        await update.message.reply_text(f"💡 Did you know?\n\n{fact}")
+    except Exception as e:
+        await update.message.reply_text("🤯 Fact machine broken. Try /joke")
+
+async def handle_joke(update: Update, context: CallbackContext) -> None:
+    """Random joke"""
+    try:
+        joke = requests.get(API_URLS["joke"], timeout=5).json()
+        if joke["type"] == "twopart":
+            await update.message.reply_text(
+                f"😂 {joke['setup']}\n\n{joke['delivery']}"
             )
         else:
-            text = "⚠️ City not found. Try another name."
+            await update.message.reply_text(f"😆 {joke['joke']}")
     except Exception as e:
-        logger.error(f"Weather error: {e}")
-        text = "⚠️ Error fetching weather data."
-    
-    keyboard = [
-        [InlineKeyboardButton("🌦 New City", callback_data="weather")],
-        [InlineKeyboardButton("🏠 Main Menu", callback_data="show_menu")]
-    ]
-    await update.message.reply_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    context.user_data.pop('awaiting_weather', None)
+        await update.message.reply_text("🤡 Joke service unavailable")
+
+async def handle_word(update: Update, context: CallbackContext) -> None:
+    """Random word"""
+    try:
+        word = requests.get(API_URLS["word"], timeout=5).json()[0]
+        await update.message.reply_text(f"📝 Today's word:\n\n{word.upper()}")
+    except Exception as e:
+        await update.message.reply_text("📚 Dictionary offline")
 
 async def handle_currency(update: Update, context: CallbackContext) -> None:
-    currency = update.message.text.upper()
+    """Currency converter"""
     try:
-        response = requests.get(CURRENCY_API_URL).json()
-        if currency in response['rates']:
-            rate = response['rates'][currency]
-            text = f"💱 Exchange Rate:\n\n1 USD = {rate:.2f} {currency}"
-        else:
-            text = "⚠️ Invalid currency code. Try USD, EUR, JPY, etc."
+        currency = update.message.text.upper()
+        rates = requests.get(API_URLS["currency"], timeout=5).json()["rates"]
+        await update.message.reply_text(
+            f"💱 1 USD = {rates.get(currency, '?')} {currency}"
+        )
     except Exception as e:
-        logger.error(f"Currency error: {e}")
-        text = "⚠️ Error fetching currency data."
-    
-    keyboard = [
-        [InlineKeyboardButton("💱 New Currency", callback_data="currency")],
-        [InlineKeyboardButton("🏠 Main Menu", callback_data="show_menu")]
-    ]
-    await update.message.reply_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    context.user_data.pop('awaiting_currency', None)
+        await update.message.reply_text("💸 Currency service down")
 
-def main():
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+# ==================== BOT SETUP ==================== #
+def main() -> None:
+    """Start the bot with all handlers"""
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    # Handlers
+    # Command handlers
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(show_menu, pattern="^show_menu$"))
-    application.add_handler(CallbackQueryHandler(menu_selection))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # Error handler
-    application.add_error_handler(lambda u, c: logger.error(c.error) if c.error else None)
+    # Callback handlers for menu
+    application.add_handler(CallbackQueryHandler(
+        lambda update, context: (
+            context.user_data.update({"awaiting_wiki": True}),
+            update.callback_query.message.reply_text("🔍 Enter a Wikipedia topic:")
+        ),
+        pattern="^wiki$"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        lambda update, context: (
+            context.user_data.update({"awaiting_weather": True}),
+            update.callback_query.message.reply_text("🌍 Enter a city name:")
+        ),
+        pattern="^weather$"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        lambda update, context: (
+            context.user_data.update({"awaiting_currency": True}),
+            update.callback_query.message.reply_text("💱 Enter currency code (e.g. USD):")
+        ),
+        pattern="^currency$"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        lambda update, context: handle_quiz(update.callback_query, context),
+        pattern="^quiz$"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        lambda update, context: handle_fact(update.callback_query, context),
+        pattern="^fact$"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        lambda update, context: handle_joke(update.callback_query, context),
+        pattern="^joke$"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        lambda update, context: handle_word(update.callback_query, context),
+        pattern="^word$"
+    ))
     
-    logger.info("Bot is running...")
+    # Message handlers for text input
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        lambda update, context: (
+            handle_wiki(update, context) if context.user_data.get("awaiting_wiki") else
+            handle_weather(update, context) if context.user_data.get("awaiting_weather") else
+            handle_currency(update, context) if context.user_data.get("awaiting_currency") else
+            start(update, context)
+        )
+    ))
+    
+    # Error handling
+    application.add_error_handler(
+        lambda update, context: logging.error(f"Error: {context.error}", exc_info=True)
+    )
+    
+    logging.info("Bot started successfully")
     application.run_polling()
 
 if __name__ == "__main__":
