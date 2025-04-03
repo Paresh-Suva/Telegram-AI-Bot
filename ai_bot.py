@@ -29,6 +29,13 @@ API_URLS = {
     "currency": "https://api.exchangerate-api.com/v4/latest/USD"
 }
 
+# Configure logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
 # ==================== CORE FUNCTIONS ==================== #
 async def is_member(user_id: int, context: CallbackContext) -> bool:
     """Check if user is channel member"""
@@ -39,11 +46,11 @@ async def is_member(user_id: int, context: CallbackContext) -> bool:
         member = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
         return member.status in ["member", "administrator", "creator"]
     except Exception as e:
-        logging.error(f"Membership check failed: {e}")
+        logger.error(f"Membership check failed: {e}")
         return False
 
 async def enforce_membership(update: Update, context: CallbackContext):
-    """Force users to join channel before using any features"""
+    """Force users to join channel before using features"""
     user_id = update.effective_user.id
     if not await is_member(user_id, context):
         keyboard = [
@@ -59,7 +66,6 @@ async def enforce_membership(update: Update, context: CallbackContext):
     return True
 
 # ==================== HANDLER FUNCTIONS ==================== #
-# ====================== For Commit ===================== #
 async def start(update: Update, context: CallbackContext) -> None:
     """Send welcome message and main menu"""
     welcome_text = (
@@ -91,11 +97,19 @@ async def start(update: Update, context: CallbackContext) -> None:
     )
 
 async def handle_wiki(update: Update, context: CallbackContext) -> None:
-    """Wikipedia search handler"""
+    """Handle Wikipedia requests"""
     if not await enforce_membership(update, context):
         return
     
     try:
+        # Clear previous state
+        context.user_data.pop("awaiting_wiki", None)
+        
+        if update.message.text == '/wiki':
+            context.user_data["awaiting_wiki"] = True
+            await update.message.reply_text("🔍 Enter a Wikipedia topic:")
+            return
+
         topic = update.message.text
         response = requests.get(f"{API_URLS['wiki']}{topic}", timeout=8)
         response.raise_for_status()
@@ -112,11 +126,11 @@ async def handle_wiki(update: Update, context: CallbackContext) -> None:
             ])
         )
     except Exception as e:
-        logging.error(f"Wiki error: {e}")
+        logger.error(f"Wiki error: {e}")
         await update.message.reply_text("🔍 Wikipedia service unavailable. Try /fact")
 
 async def handle_quiz(update: Update, context: CallbackContext) -> None:
-    """Quiz handler"""
+    """Handle quiz requests"""
     if not await enforce_membership(update, context):
         return
     
@@ -124,13 +138,13 @@ async def handle_quiz(update: Update, context: CallbackContext) -> None:
         response = requests.get(API_URLS["quiz"], timeout=5).json()
         question = response["results"][0]
         
-        options = [question["correct_answer"]] + question["incorrect_answers"]
+        options = question["incorrect_answers"] + [question["correct_answer"]]
         random.shuffle(options)
         
         context.user_data['correct_answer'] = question["correct_answer"]
         
         keyboard = [
-            [InlineKeyboardButton(option, callback_data=f"quiz_answer_{i}")]
+            [InlineKeyboardButton(option, callback_data=f"quiz_{i}")]
             for i, option in enumerate(options)
         ]
         
@@ -141,30 +155,40 @@ async def handle_quiz(update: Update, context: CallbackContext) -> None:
         )
         
     except Exception as e:
-        logging.error(f"Quiz error: {e}")
+        logger.error(f"Quiz error: {e}")
         await update.message.reply_text("📝 Quiz service down. Try /word")
 
 async def handle_quiz_answer(update: Update, context: CallbackContext) -> None:
-    """Check quiz answers"""
+    """Handle quiz answers"""
     query = update.callback_query
     await query.answer()
     
-    selected_index = int(query.data.split('_')[-1])
-    options = [button.text for row in query.message.reply_markup.inline_keyboard for button in row]
-    selected_answer = options[selected_index]
-    
-    if selected_answer == context.user_data.get('correct_answer'):
-        await query.edit_message_text(f"✅ Correct! The answer was:\n\n{selected_answer}")
-    else:
+    try:
+        selected_index = int(query.data.split('_')[-1])
+        options = [button.text for row in query.message.reply_markup.inline_keyboard for button in row]
+        selected_answer = options[selected_index]
         correct = context.user_data.get('correct_answer')
-        await query.edit_message_text(f"❌ Wrong! The correct answer was:\n\n{correct}")
+        
+        if selected_answer == correct:
+            await query.edit_message_text(f"✅ Correct! The answer was:\n{correct}")
+        else:
+            await query.edit_message_text(f"❌ Wrong! Correct answer was:\n{correct}")
+            
+    except Exception as e:
+        logger.error(f"Quiz answer error: {e}")
+        await query.edit_message_text("⚠️ Error processing answer")
 
 async def handle_weather(update: Update, context: CallbackContext) -> None:
-    """Weather lookup handler"""
+    """Handle weather requests"""
     if not await enforce_membership(update, context):
         return
     
     try:
+        if update.message.text == '/weather':
+            context.user_data["awaiting_weather"] = True
+            await update.message.reply_text("🌍 Enter a city name:")
+            return
+
         city = update.message.text
         response = requests.get(
             API_URLS["weather"],
@@ -179,10 +203,6 @@ async def handle_weather(update: Update, context: CallbackContext) -> None:
         response.raise_for_status()
         data = response.json()
         
-        if data.get('cod') != 200:
-            await update.message.reply_text("🌍 City not found. Try again with correct spelling.")
-            return
-            
         weather = (
             f"⛅ Weather in {data['name']}:\n\n"
             f"• Temperature: {data['main']['temp']}°C\n"
@@ -193,18 +213,23 @@ async def handle_weather(update: Update, context: CallbackContext) -> None:
         )
         await update.message.reply_text(weather)
         
-    except requests.exceptions.Timeout:
-        await update.message.reply_text("⌛ Weather service timeout. Try again later.")
+    except requests.exceptions.HTTPError as e:
+        await update.message.reply_text("🌍 City not found. Try again with correct spelling.")
     except Exception as e:
-        logging.error(f"Weather error: {e}")
+        logger.error(f"Weather error: {e}")
         await update.message.reply_text("🌧 Weather service unavailable. Try /wiki")
 
 async def handle_currency(update: Update, context: CallbackContext) -> None:
-    """Currency converter handler"""
+    """Handle currency requests"""
     if not await enforce_membership(update, context):
         return
     
     try:
+        if update.message.text == '/currency':
+            context.user_data["awaiting_currency"] = True
+            await update.message.reply_text("💱 Enter currency code (e.g. EUR):")
+            return
+
         currency = update.message.text.upper()
         response = requests.get(API_URLS["currency"], timeout=5)
         response.raise_for_status()
@@ -226,11 +251,11 @@ async def handle_currency(update: Update, context: CallbackContext) -> None:
         )
         
     except Exception as e:
-        logging.error(f"Currency error: {e}")
+        logger.error(f"Currency error: {e}")
         await update.message.reply_text("💸 Currency service down. Try /fact")
 
 async def handle_fact(update: Update, context: CallbackContext) -> None:
-    """Random fact handler"""
+    """Handle random facts"""
     if not await enforce_membership(update, context):
         return
     
@@ -240,11 +265,11 @@ async def handle_fact(update: Update, context: CallbackContext) -> None:
         data = response.json()
         await update.message.reply_text(f"📚 Did you know?\n\n{data['text']}")
     except Exception as e:
-        logging.error(f"Fact error: {e}")
+        logger.error(f"Fact error: {e}")
         await update.message.reply_text("📖 Fact service unavailable. Try /joke")
 
 async def handle_joke(update: Update, context: CallbackContext) -> None:
-    """Random joke handler"""
+    """Handle jokes"""
     if not await enforce_membership(update, context):
         return
     
@@ -260,11 +285,11 @@ async def handle_joke(update: Update, context: CallbackContext) -> None:
             
         await update.message.reply_text(f"😂 Joke:\n\n{joke}")
     except Exception as e:
-        logging.error(f"Joke error: {e}")
+        logger.error(f"Joke error: {e}")
         await update.message.reply_text("😅 Joke service down. Try /fact")
 
 async def handle_word(update: Update, context: CallbackContext) -> None:
-    """Random word handler"""
+    """Handle random words"""
     if not await enforce_membership(update, context):
         return
     
@@ -274,7 +299,7 @@ async def handle_word(update: Update, context: CallbackContext) -> None:
         word = response.json()[0]
         await update.message.reply_text(f"📖 Your random word:\n\n{word.capitalize()}")
     except Exception as e:
-        logging.error(f"Word error: {e}")
+        logger.error(f"Word error: {e}")
         await update.message.reply_text("📚 Word service unavailable. Try /wiki")
 
 async def verify_membership(update: Update, context: CallbackContext) -> None:
@@ -282,10 +307,14 @@ async def verify_membership(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     await query.answer()
     
-    if await is_member(query.from_user.id, context):
-        await query.edit_message_text("✅ Thanks for joining! You can now use all bot features.")
-    else:
-        await query.edit_message_text("❌ You haven't joined the channel yet. Please join and try again.")
+    try:
+        if await is_member(query.from_user.id, context):
+            await query.edit_message_text("✅ Thanks for joining! You can now use all bot features.")
+        else:
+            await query.edit_message_text("❌ You haven't joined the channel yet. Please join and try again.")
+    except Exception as e:
+        logger.error(f"Membership verification error: {e}")
+        await query.edit_message_text("⚠️ Error verifying membership")
 
 # ==================== BOT SETUP ==================== #
 def main() -> None:
@@ -296,72 +325,51 @@ def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
     # Command handlers
-    application.add_handler(CommandHandler("start", start))
+    command_handlers = [
+        CommandHandler("start", start),
+        CommandHandler("wiki", handle_wiki),
+        CommandHandler("quiz", handle_quiz),
+        CommandHandler("weather", handle_weather),
+        CommandHandler("currency", handle_currency),
+        CommandHandler("fact", handle_fact),
+        CommandHandler("joke", handle_joke),
+        CommandHandler("word", handle_word)
+    ]
     
     # Callback handlers
-    application.add_handler(CallbackQueryHandler(
-        lambda update, ctx: (
-            ctx.user_data.update({"awaiting_wiki": True}),
-            update.callback_query.message.reply_text("🔍 Enter a Wikipedia topic:")
-        ),
-        pattern="^wiki$"
-    ))
-    application.add_handler(CallbackQueryHandler(
-        handle_quiz,
-        pattern="^quiz$"
-    ))
-    application.add_handler(CallbackQueryHandler(
-        lambda update, ctx: (
-            ctx.user_data.update({"awaiting_weather": True}),
-            update.callback_query.message.reply_text("🌍 Enter a city name:")
-        ),
-        pattern="^weather$"
-    ))
-    application.add_handler(CallbackQueryHandler(
-        lambda update, ctx: (
-            ctx.user_data.update({"awaiting_currency": True}),
-            update.callback_query.message.reply_text("💱 Enter currency code (e.g. USD):")
-        ),
-        pattern="^currency$"
-    ))
-    application.add_handler(CallbackQueryHandler(
-        handle_quiz_answer,
-        pattern="^quiz_answer_"
-    ))
-    application.add_handler(CallbackQueryHandler(
-        handle_fact,
-        pattern="^fact$"
-    ))
-    application.add_handler(CallbackQueryHandler(
-        handle_joke,
-        pattern="^joke$"
-    ))
-    application.add_handler(CallbackQueryHandler(
-        handle_word,
-        pattern="^word$"
-    ))
-    application.add_handler(CallbackQueryHandler(
-        verify_membership,
-        pattern="^verify_membership$"
-    ))
+    callback_handlers = [
+        CallbackQueryHandler(handle_wiki, pattern="^wiki$"),
+        CallbackQueryHandler(handle_quiz, pattern="^quiz$"),
+        CallbackQueryHandler(handle_weather, pattern="^weather$"),
+        CallbackQueryHandler(handle_currency, pattern="^currency$"),
+        CallbackQueryHandler(handle_quiz_answer, pattern=r"^quiz_"),
+        CallbackQueryHandler(handle_fact, pattern="^fact$"),
+        CallbackQueryHandler(handle_joke, pattern="^joke$"),
+        CallbackQueryHandler(handle_word, pattern="^word$"),
+        CallbackQueryHandler(verify_membership, pattern="^verify_membership$")
+    ]
     
-    # Message handlers
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        lambda update, ctx: (
-            handle_wiki(update, ctx) if ctx.user_data.get("awaiting_wiki") else
-            handle_weather(update, ctx) if ctx.user_data.get("awaiting_weather") else
-            handle_currency(update, ctx) if ctx.user_data.get("awaiting_currency") else
-            start(update, ctx)
-        )
-    ))
+    # Message handler
+    async def handle_messages(update: Update, context: CallbackContext):
+        if context.user_data.get("awaiting_wiki"):
+            await handle_wiki(update, context)
+        elif context.user_data.get("awaiting_weather"):
+            await handle_weather(update, context)
+        elif context.user_data.get("awaiting_currency"):
+            await handle_currency(update, context)
+        else:
+            await start(update, context)
+    
+    message_handler = MessageHandler(filters.TEXT & ~filters.COMMAND, handle_messages)
+    
+    # Add all handlers
+    application.add_handlers(command_handlers + callback_handlers)
+    application.add_handler(message_handler)
     
     # Error handling
-    application.add_error_handler(
-        lambda update, ctx: logging.error(f"Error: {ctx.error}", exc_info=True)
-    )
+    application.add_error_handler(lambda update, ctx: logger.error(f"Error: {ctx.error}", exc_info=True))
     
-    logging.info("Bot starting...")
+    logger.info("Bot starting...")
     application.run_polling()
 
 if __name__ == "__main__":
