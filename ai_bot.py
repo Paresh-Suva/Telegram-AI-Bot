@@ -13,8 +13,8 @@ from telegram.ext import (
 )
 
 # ====== CONFIGURATION ====== #
-TELEGRAM_TOKEN = "7614001307:AAFVqNRYUG6BnWg7gEWbKs1nn15Que6VjCM"
-WEATHER_API_KEY = "90b2174bebb80b0308545f2d07d06787"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
 OWNER_ID = 1206054854  # Your Telegram ID
 CHANNEL_USERNAME = "@MemeAddictsDaily"  # Your channel
 
