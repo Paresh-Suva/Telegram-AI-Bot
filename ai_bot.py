@@ -1,5 +1,6 @@
 import os
 import logging
+import random
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -28,9 +29,9 @@ API_URLS = {
     "currency": "https://api.exchangerate-api.com/v4/latest/USD"
 }
 
-# ==================== IMPROVED CORE FUNCTIONS ==================== #
+# ==================== CORE FUNCTIONS ==================== #
 async def is_member(user_id: int, context: CallbackContext) -> bool:
-    """Check if user is channel member with better error handling"""
+    """Check if user is channel member"""
     if user_id == OWNER_ID:
         return True
     
@@ -57,16 +58,46 @@ async def enforce_membership(update: Update, context: CallbackContext):
         return False
     return True
 
-# ==================== IMPROVED FEATURE HANDLERS ==================== #
+# ==================== HANDLER FUNCTIONS ==================== #
+async def start(update: Update, context: CallbackContext) -> None:
+    """Send welcome message and main menu"""
+    welcome_text = (
+        "🌟 Welcome to Multi-Feature Bot! 🌟\n\n"
+        "I can help with:\n"
+        "• Wikipedia searches (/wiki)\n"
+        "• Quizzes (/quiz)\n"
+        "• Weather (/weather)\n"
+        "• Currency rates (/currency)\n"
+        "• Random facts (/fact)\n"
+        "• Jokes (/joke)\n"
+        "• Random words (/word)\n\n"
+        "Just send me a command!"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("🔍 Wikipedia", callback_data="wiki"),
+         InlineKeyboardButton("❓ Quiz", callback_data="quiz")],
+        [InlineKeyboardButton("⛅ Weather", callback_data="weather"),
+         InlineKeyboardButton("💱 Currency", callback_data="currency")],
+        [InlineKeyboardButton("📚 Random Fact", callback_data="fact"),
+         InlineKeyboardButton("😂 Joke", callback_data="joke")],
+        [InlineKeyboardButton("📖 Random Word", callback_data="word")]
+    ]
+    
+    await update.message.reply_text(
+        welcome_text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
 async def handle_wiki(update: Update, context: CallbackContext) -> None:
-    """Wikipedia search with proper state management"""
+    """Wikipedia search handler"""
     if not await enforce_membership(update, context):
         return
     
     try:
         topic = update.message.text
         response = requests.get(f"{API_URLS['wiki']}{topic}", timeout=8)
-        response.raise_for_status()  # Raise HTTP errors
+        response.raise_for_status()
         data = response.json()
         
         if 'extract' not in data:
@@ -84,23 +115,19 @@ async def handle_wiki(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("🔍 Wikipedia service unavailable. Try /fact")
 
 async def handle_quiz(update: Update, context: CallbackContext) -> None:
-    """Enhanced quiz with answer validation"""
+    """Quiz handler"""
     if not await enforce_membership(update, context):
         return
     
     try:
-        # Store quiz data in user context
         response = requests.get(API_URLS["quiz"], timeout=5).json()
         question = response["results"][0]
         
-        # Format options
         options = [question["correct_answer"]] + question["incorrect_answers"]
         random.shuffle(options)
         
-        # Store correct answer for verification
         context.user_data['correct_answer'] = question["correct_answer"]
         
-        # Create buttons for each option
         keyboard = [
             [InlineKeyboardButton(option, callback_data=f"quiz_answer_{i}")]
             for i, option in enumerate(options)
@@ -121,12 +148,10 @@ async def handle_quiz_answer(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     await query.answer()
     
-    # Extract selected answer index
     selected_index = int(query.data.split('_')[-1])
     options = [button.text for row in query.message.reply_markup.inline_keyboard for button in row]
     selected_answer = options[selected_index]
     
-    # Verify answer
     if selected_answer == context.user_data.get('correct_answer'):
         await query.edit_message_text(f"✅ Correct! The answer was:\n\n{selected_answer}")
     else:
@@ -134,7 +159,7 @@ async def handle_quiz_answer(update: Update, context: CallbackContext) -> None:
         await query.edit_message_text(f"❌ Wrong! The correct answer was:\n\n{correct}")
 
 async def handle_weather(update: Update, context: CallbackContext) -> None:
-    """Weather lookup with city validation"""
+    """Weather lookup handler"""
     if not await enforce_membership(update, context):
         return
     
@@ -174,7 +199,7 @@ async def handle_weather(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("🌧 Weather service unavailable. Try /wiki")
 
 async def handle_currency(update: Update, context: CallbackContext) -> None:
-    """Currency converter with validation"""
+    """Currency converter handler"""
     if not await enforce_membership(update, context):
         return
     
@@ -203,10 +228,67 @@ async def handle_currency(update: Update, context: CallbackContext) -> None:
         logging.error(f"Currency error: {e}")
         await update.message.reply_text("💸 Currency service down. Try /fact")
 
+async def handle_fact(update: Update, context: CallbackContext) -> None:
+    """Random fact handler"""
+    if not await enforce_membership(update, context):
+        return
+    
+    try:
+        response = requests.get(API_URLS["fact"], timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        await update.message.reply_text(f"📚 Did you know?\n\n{data['text']}")
+    except Exception as e:
+        logging.error(f"Fact error: {e}")
+        await update.message.reply_text("📖 Fact service unavailable. Try /joke")
+
+async def handle_joke(update: Update, context: CallbackContext) -> None:
+    """Random joke handler"""
+    if not await enforce_membership(update, context):
+        return
+    
+    try:
+        response = requests.get(API_URLS["joke"], timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        
+        if data['type'] == 'twopart':
+            joke = f"{data['setup']}\n\n...{data['delivery']}"
+        else:
+            joke = data['joke']
+            
+        await update.message.reply_text(f"😂 Joke:\n\n{joke}")
+    except Exception as e:
+        logging.error(f"Joke error: {e}")
+        await update.message.reply_text("😅 Joke service down. Try /fact")
+
+async def handle_word(update: Update, context: CallbackContext) -> None:
+    """Random word handler"""
+    if not await enforce_membership(update, context):
+        return
+    
+    try:
+        response = requests.get(API_URLS["word"], timeout=5)
+        response.raise_for_status()
+        word = response.json()[0]
+        await update.message.reply_text(f"📖 Your random word:\n\n{word.capitalize()}")
+    except Exception as e:
+        logging.error(f"Word error: {e}")
+        await update.message.reply_text("📚 Word service unavailable. Try /wiki")
+
+async def verify_membership(update: Update, context: CallbackContext) -> None:
+    """Verify channel membership"""
+    query = update.callback_query
+    await query.answer()
+    
+    if await is_member(query.from_user.id, context):
+        await query.edit_message_text("✅ Thanks for joining! You can now use all bot features.")
+    else:
+        await query.edit_message_text("❌ You haven't joined the channel yet. Please join and try again.")
+
 # ==================== BOT SETUP ==================== #
 def main() -> None:
-    """Start the bot with all handlers"""
-    # Validate tokens before starting
+    """Start the bot"""
     if not TELEGRAM_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN environment variable missing!")
     
@@ -224,7 +306,7 @@ def main() -> None:
         pattern="^wiki$"
     ))
     application.add_handler(CallbackQueryHandler(
-        lambda update, ctx: handle_quiz(update, ctx),
+        handle_quiz,
         pattern="^quiz$"
     ))
     application.add_handler(CallbackQueryHandler(
@@ -246,19 +328,19 @@ def main() -> None:
         pattern="^quiz_answer_"
     ))
     application.add_handler(CallbackQueryHandler(
-        lambda update, ctx: handle_fact(update, ctx),
+        handle_fact,
         pattern="^fact$"
     ))
     application.add_handler(CallbackQueryHandler(
-        lambda update, ctx: handle_joke(update, ctx),
+        handle_joke,
         pattern="^joke$"
     ))
     application.add_handler(CallbackQueryHandler(
-        lambda update, ctx: handle_word(update, ctx),
+        handle_word,
         pattern="^word$"
     ))
     application.add_handler(CallbackQueryHandler(
-        lambda update, ctx: enforce_membership(update, ctx),
+        verify_membership,
         pattern="^verify_membership$"
     ))
     
@@ -278,7 +360,7 @@ def main() -> None:
         lambda update, ctx: logging.error(f"Error: {ctx.error}", exc_info=True)
     )
     
-    logging.info("Bot starting with enforced channel membership...")
+    logging.info("Bot starting...")
     application.run_polling()
 
 if __name__ == "__main__":
