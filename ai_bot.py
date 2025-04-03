@@ -59,6 +59,7 @@ async def enforce_membership(update: Update, context: CallbackContext):
     return True
 
 # ==================== HANDLER FUNCTIONS ==================== #
+# ====================== For Commit ===================== #
 async def start(update: Update, context: CallbackContext) -> None:
     """Send welcome message and main menu"""
     welcome_text = (
